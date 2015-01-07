@@ -1,0 +1,32 @@
+(Mon Jun 17 20:15:27 2013)                                                      
+r.report map=GAP_land_cover@justin units=k                                      
++-----------------------------------------------------------------------------+
+|                         RASTER MAP CATEGORY REPORT                          |
+|LOCATION: shepherd_creek                             Mon Jun 17 20:15:28 2013|
+|-----------------------------------------------------------------------------|
+|          north: 440266.79223235    east: 1382647.42333278                   |
+|REGION    south: 434199.87588853    west: 1377768.83663328                   |
+|          res:       30.03423933    res:       29.92997975                   |
+|-----------------------------------------------------------------------------|
+|MASK: none                                                                   |
+|-----------------------------------------------------------------------------|
+|MAP: (untitled) (GAP_land_cover@justin in justin)                            |
+|-----------------------------------------------------------------------------|
+|                      Category Information                        |  square  |
+|  #|description                                                   |kilometers|
+|-----------------------------------------------------------------------------|
+| 38|Evergreen Plantations or Managed Pine. . . . . . . . . . . . .|  0.014197|
+| 79|Northern Atlantic Coastal Plain Dry Hardwood Forest. . . . . .|  0.030315|
+| 86|Southern Interior Low Plateau Dry-Mesic Oak Forest . . . . . .|  0.749196|
+|126|Southern-Central Interior Mesophytic Forest. . . . . . . . . .|  0.601294|
+|556|Cultivated Cropland. . . . . . . . . . . . . . . . . . . . . .|  0.091530|
+|557|Pasture/Hay. . . . . . . . . . . . . . . . . . . . . . . . . .|  0.242188|
+|567|Harvested Forest - Grass/Forb Regeneration . . . . . . . . . .|  0.011024|
+|568|Harvested Forest - Shrub Regeneration. . . . . . . . . . . . .|  0.013696|
+|581|Developed, Open Space. . . . . . . . . . . . . . . . . . . . .|  0.433517|
+|582|Developed, Low Intensity . . . . . . . . . . . . . . . . . . .|  0.448465|
+|583|Developed, Medium Intensity. . . . . . . . . . . . . . . . . .|  0.114329|
+|-----------------------------------------------------------------------------|
+|TOTAL                                                             |  2.749753|
++-----------------------------------------------------------------------------+
+(Mon Jun 17 20:15:28 2013) Command finished (0 sec)                             

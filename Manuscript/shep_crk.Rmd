@@ -1,0 +1,248 @@
+Shepherd Creek Water Quality 
+========================================================
+
+```{r load-packages, message=FALSE, echo=FALSE, results='hide'}
+library(DBI)
+library(RSQLite)
+library(ggplot2)
+library(plyr)
+library(lubridate)
+library(reshape)
+library(scales)
+library(grid)
+library(dismo)
+library(ada)
+library(MASS)
+library(nlme)
+library(lattice)
+library(xts)
+library(timeSeries)
+library(randomForest)
+
+# import data and summarize
+dbPath <- '~/Dropbox/Research/ShepherdCreek/shepcrk.sqlite'
+dbDrv <- dbDriver("SQLite")
+db <- dbConnect(dbDrv, dbPath)
+# dbListTables(db)
+# use dbListFields(db, "table_name") to see table structure
+
+# query the database
+data <- dbGetQuery(db, 'SELECT KLUK.sampling_date, KLUK."Mean TemperatureF", KLUK."Mean Humidity", KLUK."Mean Wind SpeedMPH", KLUK.Precipitationin, KLUK."CloudCover", bacteria.site_id, bacteria.e_coli, bacteria.fecal_colif, bacteria.entero, subbasins.gap_38_p, subbasins.gap_79_p, subbasins.gap_86_p, subbasins.gap_126_p, subbasins.gap_556_p, subbasins.gap_557_p, subbasins.gap_568_p, subbasins.gap_581_p, subbasins.gap_582_p, subbasins.gap_583_p, subbasins.ksat, subbasins.awc, subbasins.num_septics, subbasins.rain_barrels, subbasins.rain_gardens, subbasins.sewer_length, subbasins.area, subbasins.sewer_dens, subbasins.slope, water_quality.temp, water_quality.sp_cond, water_quality.do_sat, water_quality.do, water_quality.ph, water_quality.orp, water_quality.turb, water_quality.ssc, water_quality.alk, water_quality.doc_r5, water_quality.toc_r5, water_quality.cl, water_quality.br, water_quality.no3, water_quality.o_po4, water_quality.so4, water_quality.nh3_n, water_quality.din, water_quality.tkn, water_quality.tdp, water_quality.tp, water_quality.al_diss, water_quality.ca, water_quality.cu_diss, water_quality.fe_diss, water_quality.mg, water_quality.mn_diss, water_quality.k, water_quality.na, water_quality.zn_diss, water_quality.al_tr, water_quality.cu_tr, water_quality.fe_tr, water_quality.mn_tr, water_quality.zn_tr FROM KLUK LEFT JOIN bacteria ON bacteria.sampling_date=KLUK.sampling_date LEFT JOIN subbasins ON bacteria.site_id=subbasins.site_id LEFT JOIN water_quality ON water_quality.sampling_date=KLUK.sampling_date AND water_quality.site_id=bacteria.site_id')
+
+# close the database
+dbDisconnect(db)
+```
+
+```{r clean-data, echo=FALSE, message=FALSE, results='hide'}
+# clean up the data by creating a data class for sampling date, 
+# change site id to factor, remove spaces from column names
+data$sampling_date <- mdy(data$sampling_date)
+data$site_id <- factor(data$site_id)
+names(data) <- gsub(' ',"_", names(data))
+
+data[data == 'nd'] <- NA
+data[data == 'u'] <- NA
+data[data == 'n'] <- NA
+
+# Order the data by site and date
+data <- data[order(data$site_id, data$sampling_date), ]
+
+# create columns for 24 and 48 hr cumulative rainfall
+precip <- as.timeSeries(subset(data, select=c("sampling_date", "PrecipitationIn")))
+data$precip_prev_24hr <- as.numeric(lag(precip, 1))
+data$precip_prev_48hr <- as.numeric(lag(precip, 2))
+tmp <- data.frame(data$PrecipitationIn, data$precip_prev_24hr, data$precip_prev_48hr)
+data$cum_precip <- apply(tmp, 1, sum)
+
+#clean up
+rm(tmp,precip)
+
+# create a column to classify wet and dry
+#data$season <- ifelse(data$cum_precip >= 1.5, 1, 0)
+#data$season <- factor(data$season, levels=0:1, labels=c("dry","wet"))
+```
+```{r summarize-data}
+# transform E.coli using ln(x + 1) to stabalize variance and handle zeros
+data$log_e_coli <- log1p(data$e_coli)
+data$sqrt_ecoli <- sqrt(data$e_coli)
+data$limit <- ifelse(data$e_coli < 406, "No", "Yes")
+
+str(data)
+summary(data)
+
+# Only use data where there is a response 
+summary(data$log_e_coli)
+# 1103 NAs
+
+# 177 Observations for E. coli
+data <- data[!is.na(data$log_e_coli),]
+
+(sites_e_coli <- ddply(data, ~ site_id, summarise, mean=mean(log_e_coli), median=median(log_e_coli), sd=sd(log_e_coli), min=min(log_e_coli), max=max(log_e_coli)))
+```
+There are 177 observations for E. coli.
+Plot the data
+
+```{r plot-data, fig.align='center'}
+qqnorm(data$log_e_coli)
+qqline(data$log_e_coli)
+
+qqnorm(data$sqrt_ecoli)
+qqline(data$sqrt_ecoli)
+
+qplot(factor(site_id), log_e_coli, data=data, geom="boxplot")
+
+p1 <- ggplot(data, aes(log_e_coli)) 
+p1 + stat_bin(binwidth=1.5) + facet_wrap(~site_id)
+p1 + stat_density(geom = "path", position = "identity", aes(colour = factor(site_id)))
+
+p2 <- ggplot(data, aes(PrecipitationIn, log_e_coli)) + geom_line() + geom_point() + facet_wrap(~site_id)
+print(p2)
+
+data.m <- melt(data, id="sampling_date", measure=c("Mean_Wind_SpeedMPH","PrecipitationIn", "log_e_coli"))
+p3 <- ggplot(data.m, aes(sampling_date, value)) + geom_point() + facet_grid(variable ~ ., scales="free_y")
+print(p3)
+```
+
+Take a look at the correlations bewteen the variables. Remove explanatory variables that are collinear by first removing variables that are expensive to gather, or cannot be obtained in real-time.  
+
+```{r corr-data}
+# remove gap_567_p, chlor, f since all values are NA
+data_cor <- cor(data[c(2:6,8:16,18:36,38:41,43:67,69)], use="pairwise.complete.obs")
+
+data_cor_m <- melt(data_cor)
+```
+```{r corr-plots, fig.align='center'}
+ggplot(data_cor_m, aes(X1, X2, fill = value)) + geom_tile() + 
+  scale_fill_gradient2(low = "blue",  high = "yellow") + theme(axis.text.x=element_text(angle=-90))
+```
+Take a look at a time series plot of E. coli across the sampling sites
+```{r time-plots, fig.align='center'}
+ggplot(data, aes(x=sampling_date, y=log_e_coli)) + geom_point() + geom_line() +
+  facet_wrap(~site_id, scale="free") + xlab("Sample Date") + 
+  ylab(expression(paste(italic("E. coli") ," (CFU/100ml)"))) + 
+  ggtitle(expression(paste(italic("E. coli"), " Time Series Across Sampling Sites" ))) +
+  theme_bw() + scale_x_datetime(labels = date_format("%b-%y"))
+```
+
+```{r random-forest}
+data_rf <- rfImpute(x=data[,c(2:7,11:66)], y=data[,c(68)])
+```
+
+```{r boosted-tree}
+set.seed(10)
+# boosted tree
+E.coli.tc1.lr005 <- gbm.step(data=data,
+      gbm.x=c(2:7,11:66),
+      gbm.y=68,
+      family="gaussian",
+      tree.complexity=1,
+      learning.rate=0.005,
+      bag.fraction=0.5)
+
+#cv deviance = 2.153; se = 0.447
+#cv correlation 0.812; se=0.037
+
+summary(E.coli.tc1.lr005)
+
+set.seed(18)
+E.coli.tc2.lr005 <- gbm.step(data=data,
+      gbm.x=c(2:7,11:66),
+      gbm.y=68,
+      family="gaussian",
+      tree.complexity=2,
+      learning.rate=0.005,
+      bag.fraction=0.5)
+
+#cv deviance = 2.106; se=0.526
+#cv correlation = 0.822; se=0.038
+
+summary(E.coli.tc2.lr005)
+
+set.seed(22)
+E.coli.tc5.lr005 <- gbm.step(data=data,
+      gbm.x=c(2:7,11:66),
+      gbm.y=68,
+      family="gaussian",
+      tree.complexity=5,
+      learning.rate=0.005,
+      bag.fraction=0.5)
+
+#cv deviance = 2.05; se = 0.479
+#cv correlation = 0.81; se = 0.038
+ 
+summary(E.coli.tc5.lr005)
+gbm.plot(E.coli.tc5.lr005)
+find.int.E.coli.tc5.lr005 <- gbm.interactions(E.coli.tc5.lr005)
+find.int.E.coli.tc5.lr005
+
+gbm.perspec(E.coli.tc5.lr005,3,4,y.range=c(0,10),z.range=c(0,10))
+
+E.coli.tc5.lr005.simpl <- gbm.simplify(E.coli.tc5.lr005)
+
+E.coli.tc5.lr005.simplified <- gbm.step(data=data, 
+         gbm.x=E.coli.tc5.lr005.simpl$pred.list[[40]],
+         gbm.y=68,
+         family="gaussian",
+         tree.complexity=5,
+         learning.rate=0.005,
+         bag.fraction=0.5
+)
+
+summary(E.coli.tc5.lr005.simplified)
+pdf('/Users/justinjent/Dropbox/Research/ShepherdCreek/Manuscript/figures/gbmplot.pdf')
+gbm.plot(E.coli.tc5.lr005.simplified)
+dev.off()
+find.int.E.coli.tc5.lr005 <- gbm.interactions(E.coli.tc5.lr005.simplified)
+find.int.E.coli.tc5.lr005
+
+# predict values
+E.coli.tc5.lr005.pred <- predict.gbm(E.coli.tc5.lr005.simplified, n.trees=E.coli.tc5.lr005.simplified$gbm.call$best.trees, type="response")
+
+calc.deviance(obs=data$log_e_coli, pred=E.coli.tc5.lr005.pred, calc.mean=TRUE, family="gaussian")
+
+
+par(mfrow=c(1,1))
+with(data,{
+  cr <- range(E.coli.tc5.lr005.pred, log_e_coli)
+  eqscplot(E.coli.tc5.lr005.pred, log_e_coli, xlim=cr, ylim=cr, ylab="Actual", xlab="Predicted", main="Shepherd Creek") 
+  abline(0,1,col="blue",lty=5)
+})
+
+# principal component analysis
+test_data <- data[,c(2:6,11:66)]
+shep_prin_comps <- princomp(~.,data=test_data,,na.action = na.omit, scale=TRUE)
+# does not work because of the dimensions of the data. There are too many missing variables.
+
+
+# Generalized Least Squares
+shep_gls_1 <- gls(log_e_coli ~ PrecipitationIn + precip_prev_24hr + precip_prev_48hr + Mean_TemperatureF, data, na.action=na.omit)
+
+summary(shep_gls_1)
+plot(shep_gls_1)
+
+shep_gls_2 <- gls(log_e_coli ~ PrecipitationIn + precip_prev_24hr + precip_prev_48hr + Mean_TemperatureF + Mean_Humidity + Mean_Wind_SpeedMPH + CloudCover + site_id, data, na.action=na.omit)
+
+summary(shep_gls_2)
+plot(shep_gls_1)
+
+anova(shep_gls_1, shep_gls_2)
+
+shep_gls_1_pred <- predict(shep_gls_1)
+shep_gls_2_pred <- predict(shep_gls_2)
+
+par(mfrow=c(1,1))
+with(data,{
+  cr <- range(shep_gls_1_pred)
+  eqscplot(shep_gls_1_pred, log_e_coli[3:177], xlim=cr, ylim=cr, ylab="Actual", xlab="Predicted", main="Generalized Least Squares") 
+  abline(0,1,col="blue",lty=5)
+})
+
+
+```
+
+
+
+
+
+
+
